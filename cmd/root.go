@@ -291,7 +291,7 @@ func getRepos(owner string, endCursor *string) (*reposQuery, error) {
 	query := new(reposQuery)
 	variables := map[string]interface{}{
 		"owner":     graphql.String(owner),
-		"endCursor": graphql.NewID(endCursor),
+		"endCursor": graphql.NewString(graphql.String(endCursor)),
 	}
 
 	err := client.Query("getRepos", query, variables)
