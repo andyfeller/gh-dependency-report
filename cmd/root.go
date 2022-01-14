@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 
 	"github.com/cli/go-gh"
@@ -19,49 +20,10 @@ import (
 
 var (
 	owner        string
-	repoLimits   []string
 	repoExcludes []string
 	outputFile   string
+	client       api.GQLClient
 )
-
-type repositoryQuery struct {
-	Repository struct {
-		Name  string
-		Owner struct {
-			Login string
-		}
-		DependencyGraphManifests struct {
-			PageInfo struct {
-				HasNextPage bool
-				EndCursor   string
-			}
-			Nodes []struct {
-				Filename     string
-				Dependencies struct {
-					PageInfo struct {
-						HasNextPage bool
-						EndCursor   string
-					}
-					Nodes []struct {
-						HasDependencies bool
-						PackageManager  string
-						PackageName     string
-						Repository      struct {
-							LicenseInfo struct {
-								SpdxId string
-								Url    string
-							}
-						}
-						Requirements string
-					}
-				} `graphql:"dependencies(first: 100, after: $dependencyCursor)"`
-				DependenciesCount int
-				ExceedsMaxSize    bool
-				Parseable         bool
-			}
-		} `graphql:"dependencyGraphManifests(first: 10, after: $manifestCursor)"`
-	} `graphql:"repository(owner: $owner, name: $name)"`
-}
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -71,7 +33,9 @@ var rootCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 
-		client, err := gh.GQLClient(&api.ClientOptions{
+		var err error
+
+		client, err = gh.GQLClient(&api.ClientOptions{
 			Headers: map[string]string{
 				"Accept": "application/vnd.github.hawkgirl-preview+json",
 			},
@@ -82,21 +46,54 @@ var rootCmd = &cobra.Command{
 		}
 
 		owner = args[0]
-		repos := []string{}
+
+		// Resolve repositories in scope of report
+		var repos []string
 
 		if len(args) > 1 {
 			repos = args[1:]
+		} else {
+			repos = make([]string, 100) // Struggle for initial slice length given potential growth for large organizations
+			var reposCursor *string
+
+			for {
+				reposQuery, err := getRepos(owner, reposCursor)
+
+				if err != nil {
+					return err
+				}
+
+				for _, repo := range reposQuery.RepositoryOwner.Repositories.Nodes {
+					repos = append(repos, repo.Name)
+				}
+
+				reposCursor = &reposQuery.RepositoryOwner.Repositories.PageInfo.EndCursor
+
+				if !reposQuery.RepositoryOwner.Repositories.PageInfo.HasNextPage {
+					break
+				}
+			}
+		}
+
+		sort.Strings(repos)
+
+		if len(repoExcludes) > 0 {
+			sort.Strings(repoExcludes)
+
+			for _, repoExclude := range repoExcludes {
+				for i, repo := range repos {
+					if repoExclude == repo {
+						repos = append(repos[:i], repos[i+1:]...)
+					}
+				}
+			}
 		}
 
 		if len(repos) <= 0 {
-			// TODO: Get list of repositories by owner if repoLimits is empty and exclude repoExcludes
-			return errors.New("Need to implement logic to retrieve owner repositories")
+			return errors.New("No repositories to report on")
 		}
 
-		if len(repoExcludes) > 0 {
-			return errors.New("Need to implement logic to exclude repositories from report")
-		}
-
+		// Prepare writer for outputting report
 		csvWriterOutput := os.Stdout
 
 		if len(outputFile) > 0 {
@@ -129,51 +126,61 @@ var rootCmd = &cobra.Command{
 			"License Url",
 		})
 
+		// Retrieve data and produce report
 		for _, repo := range repos {
-			query := new(repositoryQuery)
-			hasNextPage := true
-			manifestCursor := ""
-			dependencyCursor := ""
+			var manifestCursor string
+			fmt.Println("Repository", repo)
 
-			for hasNextPage {
-				variables := map[string]interface{}{
-					"owner":            graphql.String(owner),
-					"name":             graphql.String(repo),
-					"manifestCursor":   graphql.String(manifestCursor),
-					"dependencyCursor": graphql.String(dependencyCursor),
-				}
-
-				err = client.Query("repoDependencies", query, variables)
+			for {
+				manifestsQuery, err := getManifests(owner, repo, manifestCursor)
 
 				if err != nil {
 					return err
 				}
 
-				fmt.Println(query.Repository.Name, query.Repository.Owner)
-				repository := query.Repository
-				hasNextPage = repository.DependencyGraphManifests.PageInfo.HasNextPage
-				manifestCursor = repository.DependencyGraphManifests.PageInfo.EndCursor
+				for _, manifest := range manifestsQuery.Repository.DependencyGraphManifests.Nodes {
+					var dependencyCursor string
+					fmt.Println("Manifest", manifest)
 
-				for _, manifest := range repository.DependencyGraphManifests.Nodes {
-					fmt.Println(manifest)
-					hasNextPage = hasNextPage || manifest.Dependencies.PageInfo.HasNextPage
-					dependencyCursor = manifest.Dependencies.PageInfo.EndCursor
+					for {
+						dependenciesQuery, err := getDependencies(manifest.Id, dependencyCursor)
 
-					for _, dependency := range manifest.Dependencies.Nodes {
-						csvWriter.Write([]string{
-							repository.Owner.Login,
-							repository.Name,
-							manifest.Filename,
-							strconv.FormatBool(manifest.ExceedsMaxSize),
-							strconv.FormatBool(manifest.Parseable),
-							dependency.PackageManager,
-							dependency.PackageName,
-							strconv.FormatBool(dependency.HasDependencies),
-							dependency.Requirements,
-							dependency.Repository.LicenseInfo.SpdxId,
-							dependency.Repository.LicenseInfo.Url,
-						})
+						if err != nil {
+							return err
+						}
+
+						for _, dependency := range dependenciesQuery.Node.DependencyGraphManifest.Dependencies.Nodes {
+							fmt.Println("Dependency", dependency)
+
+							csvWriter.Write([]string{
+								owner,
+								repo,
+								manifest.Filename,
+								strconv.FormatBool(manifest.ExceedsMaxSize),
+								strconv.FormatBool(manifest.Parseable),
+								dependency.PackageManager,
+								dependency.PackageName,
+								strconv.FormatBool(dependency.HasDependencies),
+								dependency.Requirements,
+								dependency.Repository.LicenseInfo.SpdxId,
+								dependency.Repository.LicenseInfo.Url,
+							})
+						}
+
+						fmt.Println("Dependencies.PageInfo", dependenciesQuery.Node.DependencyGraphManifest.Dependencies.PageInfo)
+						dependencyCursor = dependenciesQuery.Node.DependencyGraphManifest.Dependencies.PageInfo.EndCursor
+
+						if !dependenciesQuery.Node.DependencyGraphManifest.Dependencies.PageInfo.HasNextPage {
+							break
+						}
 					}
+				}
+
+				fmt.Println("Manifests.PageInfo", manifestsQuery.Repository.DependencyGraphManifests.PageInfo)
+				manifestCursor = manifestsQuery.Repository.DependencyGraphManifests.PageInfo.EndCursor
+
+				if !manifestsQuery.Repository.DependencyGraphManifests.PageInfo.HasNextPage {
+					break
 				}
 			}
 		}
@@ -194,4 +201,100 @@ func Execute() {
 func init() {
 	rootCmd.Flags().StringSliceVarP(&repoExcludes, "exclude", "e", []string{}, "Repositories to exclude from report")
 	rootCmd.Flags().StringVarP(&outputFile, "output-file", "o", "", "Name of file to write CSV report, defaults to stdout")
+}
+
+type dependenciesQuery struct {
+	Node struct {
+		DependencyGraphManifest struct {
+			Dependencies struct {
+				PageInfo struct {
+					HasNextPage bool
+					EndCursor   string
+				}
+				Nodes []struct {
+					HasDependencies bool
+					PackageManager  string
+					PackageName     string
+					Repository      struct {
+						LicenseInfo struct {
+							SpdxId string
+							Url    string
+						}
+					}
+					Requirements string
+				}
+				TotalCount int
+			} `graphql:"dependencies(first: 100, after: $endCursor)"`
+		} `graphql:"... on DependencyGraphManifest"`
+	} `graphql:"node(id: $id)"`
+}
+
+func getDependencies(id string, endCursor string) (*dependenciesQuery, error) {
+	query := new(dependenciesQuery)
+	variables := map[string]interface{}{
+		"id":        graphql.ID(id),
+		"endCursor": graphql.String(endCursor),
+	}
+
+	err := client.Query("getDependencies", query, variables)
+
+	return query, err
+}
+
+type manifestsQuery struct {
+	Repository struct {
+		DependencyGraphManifests struct {
+			Nodes []struct {
+				DependenciesCount int
+				ExceedsMaxSize    bool
+				Filename          string
+				Id                string
+				Parseable         bool
+			}
+			PageInfo struct {
+				HasNextPage bool
+				EndCursor   string
+			}
+			TotalCount int
+		} `graphql:"dependencyGraphManifests(first: 10, after: $endCursor)"`
+	} `graphql:"repository(owner: $owner, name: $repo)"`
+}
+
+func getManifests(owner string, repo string, endCursor string) (*manifestsQuery, error) {
+	query := new(manifestsQuery)
+	variables := map[string]interface{}{
+		"owner":     graphql.String(owner),
+		"repo":      graphql.String(repo),
+		"endCursor": graphql.String(endCursor),
+	}
+
+	err := client.Query("getManifests", query, variables)
+
+	return query, err
+}
+
+type reposQuery struct {
+	RepositoryOwner struct {
+		Repositories struct {
+			Nodes []struct {
+				Name string
+			}
+			PageInfo struct {
+				HasNextPage bool
+				EndCursor   string
+			}
+		} `graphql:"repositories(first: 100, after: $endCursor, ownerAffiliations: [OWNER])"`
+	} `graphql:"repositoryOwner(login: $owner)"`
+}
+
+func getRepos(owner string, endCursor *string) (*reposQuery, error) {
+	query := new(reposQuery)
+	variables := map[string]interface{}{
+		"owner":     graphql.String(owner),
+		"endCursor": graphql.NewID(endCursor),
+	}
+
+	err := client.Query("getRepos", query, variables)
+
+	return query, err
 }
