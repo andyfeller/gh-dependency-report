@@ -7,15 +7,16 @@ package cmd
 import (
 	"encoding/csv"
 	"errors"
-	"fmt"
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/cli/go-gh"
 	"github.com/cli/go-gh/pkg/api"
 	graphql "github.com/cli/shurcooL-graphql"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 )
 
 var (
@@ -23,6 +24,7 @@ var (
 	repoExcludes []string
 	outputFile   string
 	client       api.GQLClient
+	sugar        *zap.SugaredLogger
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -53,7 +55,7 @@ var rootCmd = &cobra.Command{
 		if len(args) > 1 {
 			repos = args[1:]
 		} else {
-			repos = make([]string, 100) // Struggle for initial slice length given potential growth for large organizations
+			repos = make([]string, 0, 100) // Struggle for initial slice length given potential growth for large organizations
 			var reposCursor *string
 
 			for {
@@ -79,6 +81,7 @@ var rootCmd = &cobra.Command{
 
 		if len(repoExcludes) > 0 {
 			sort.Strings(repoExcludes)
+			sugar.Debugf("Excluding repos", "repos", repoExcludes)
 
 			for _, repoExclude := range repoExcludes {
 				for i, repo := range repos {
@@ -93,10 +96,14 @@ var rootCmd = &cobra.Command{
 			return errors.New("No repositories to report on")
 		}
 
+		sugar.Infof("Processing repos: %s", repos)
+
 		// Prepare writer for outputting report
 		csvWriterOutput := os.Stdout
 
 		if len(outputFile) > 0 {
+			sugar.Debugf("Setting up output file \"%s\"", outputFile)
+
 			if _, err := os.Stat(outputFile); errors.Is(err, os.ErrExist) {
 				return err
 			}
@@ -127,30 +134,43 @@ var rootCmd = &cobra.Command{
 		})
 
 		// Retrieve data and produce report
+		var backoffQueue []manifestBackoff
+
 		for _, repo := range repos {
-			var manifestCursor string
-			fmt.Println("Repository", repo)
+			var manifestCursor *string
+			sugar.Debugf("Processing %s/%s", owner, repo)
 
 			for {
 				manifestsQuery, err := getManifests(owner, repo, manifestCursor)
 
 				if err != nil {
-					return err
+					wtf := err.Error()
+					if strings.Contains(wtf, "Message: loading") {
+						backoffQueue = append(backoffQueue, manifestBackoff{
+							Owner:          owner,
+							RepositoryName: repo,
+							EndCursor:      manifestCursor,
+						})
+						break
+					} else {
+						return err
+					}
 				}
 
 				for _, manifest := range manifestsQuery.Repository.DependencyGraphManifests.Nodes {
-					var dependencyCursor string
-					fmt.Println("Manifest", manifest)
+					var dependencyCursor *string
+					sugar.Debugf("Processing %s/%s > %s", owner, repo, manifest.Filename)
 
 					for {
 						dependenciesQuery, err := getDependencies(manifest.Id, dependencyCursor)
 
 						if err != nil {
-							return err
+							sugar.Warnf("Error processing %s/%s > %s: %s", owner, repo, manifest.Filename, err)
+							break
 						}
 
 						for _, dependency := range dependenciesQuery.Node.DependencyGraphManifest.Dependencies.Nodes {
-							fmt.Println("Dependency", dependency)
+							sugar.Debugf("Processing %s/%s > %s > %s", owner, repo, manifest.Filename, dependency.PackageName)
 
 							csvWriter.Write([]string{
 								owner,
@@ -167,8 +187,7 @@ var rootCmd = &cobra.Command{
 							})
 						}
 
-						fmt.Println("Dependencies.PageInfo", dependenciesQuery.Node.DependencyGraphManifest.Dependencies.PageInfo)
-						dependencyCursor = dependenciesQuery.Node.DependencyGraphManifest.Dependencies.PageInfo.EndCursor
+						dependencyCursor = &dependenciesQuery.Node.DependencyGraphManifest.Dependencies.PageInfo.EndCursor
 
 						if !dependenciesQuery.Node.DependencyGraphManifest.Dependencies.PageInfo.HasNextPage {
 							break
@@ -176,13 +195,16 @@ var rootCmd = &cobra.Command{
 					}
 				}
 
-				fmt.Println("Manifests.PageInfo", manifestsQuery.Repository.DependencyGraphManifests.PageInfo)
-				manifestCursor = manifestsQuery.Repository.DependencyGraphManifests.PageInfo.EndCursor
+				manifestCursor = &manifestsQuery.Repository.DependencyGraphManifests.PageInfo.EndCursor
 
 				if !manifestsQuery.Repository.DependencyGraphManifests.PageInfo.HasNextPage {
 					break
 				}
 			}
+		}
+
+		if len(backoffQueue) > 0 {
+			sugar.Debugf("Reconciling back off queue: %s", backoffQueue)
 		}
 
 		return nil
@@ -201,6 +223,10 @@ func Execute() {
 func init() {
 	rootCmd.Flags().StringSliceVarP(&repoExcludes, "exclude", "e", []string{}, "Repositories to exclude from report")
 	rootCmd.Flags().StringVarP(&outputFile, "output-file", "o", "", "Name of file to write CSV report, defaults to stdout")
+
+	logger, _ := zap.NewDevelopment()
+	defer logger.Sync()
+	sugar = logger.Sugar()
 }
 
 type dependenciesQuery struct {
@@ -229,11 +255,11 @@ type dependenciesQuery struct {
 	} `graphql:"node(id: $id)"`
 }
 
-func getDependencies(id string, endCursor string) (*dependenciesQuery, error) {
+func getDependencies(id string, endCursor *string) (*dependenciesQuery, error) {
 	query := new(dependenciesQuery)
 	variables := map[string]interface{}{
 		"id":        graphql.ID(id),
-		"endCursor": graphql.String(endCursor),
+		"endCursor": (*graphql.String)(endCursor),
 	}
 
 	err := client.Query("getDependencies", query, variables)
@@ -256,16 +282,16 @@ type manifestsQuery struct {
 				EndCursor   string
 			}
 			TotalCount int
-		} `graphql:"dependencyGraphManifests(first: 10, after: $endCursor)"`
+		} `graphql:"dependencyGraphManifests(first: 10, after: $endCursor, withDependencies: true)"`
 	} `graphql:"repository(owner: $owner, name: $repo)"`
 }
 
-func getManifests(owner string, repo string, endCursor string) (*manifestsQuery, error) {
+func getManifests(owner string, repo string, endCursor *string) (*manifestsQuery, error) {
 	query := new(manifestsQuery)
 	variables := map[string]interface{}{
 		"owner":     graphql.String(owner),
 		"repo":      graphql.String(repo),
-		"endCursor": graphql.String(endCursor),
+		"endCursor": (*graphql.String)(endCursor),
 	}
 
 	err := client.Query("getManifests", query, variables)
@@ -291,10 +317,16 @@ func getRepos(owner string, endCursor *string) (*reposQuery, error) {
 	query := new(reposQuery)
 	variables := map[string]interface{}{
 		"owner":     graphql.String(owner),
-		"endCursor": graphql.NewString(graphql.String(endCursor)),
+		"endCursor": (*graphql.String)(endCursor),
 	}
 
 	err := client.Query("getRepos", query, variables)
 
 	return query, err
+}
+
+type manifestBackoff struct {
+	Owner          string
+	RepositoryName string
+	EndCursor      *string
 }
