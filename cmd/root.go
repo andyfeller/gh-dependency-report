@@ -7,11 +7,13 @@ package cmd
 import (
 	"encoding/csv"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cli/go-gh"
 	"github.com/cli/go-gh/pkg/api"
@@ -20,22 +22,70 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	owner        string
-	repoExcludes []string
-	outputFile   string
-	sugar        *zap.SugaredLogger
-)
+type cmdFlags struct {
+	reposExclude []string
+	reportFile   string
+}
 
-func runCmd(args []string, g Getter, out io.Writer) error {
-	owner = args[0]
+func NewCmd() *cobra.Command {
+
+	// Instantiate struct to contain values from cobra flags; arguments are handled within RunE
+	cmdFlags := cmdFlags{}
+
+	// Instantiate cobra command driving work from package
+	// Closures are used for cobra command lifecycle hooks for access to cobra flags struct
+	cmd := cobra.Command{
+		Use:   "gh-dependency-report [flags] owner [repo ...]",
+		Short: "Generate report of repository manifests and dependencies discovered through the dependency graph",
+		Long:  "Generate report of repository manifests and dependencies discovered through the dependency graph",
+		Args:  cobra.MinimumNArgs(1),
+		// Setup command lifecycle handler; cmd representing the cobra.Command being instantiated now
+		RunE: func(cmd *cobra.Command, args []string) error {
+
+			var err error
+			var client api.GQLClient
+
+			client, err = gh.GQLClient(&api.ClientOptions{
+				Headers: map[string]string{
+					"Accept": "application/vnd.github.hawkgirl-preview+json",
+				},
+			})
+
+			if err != nil {
+				return err
+			}
+
+			owner := args[0]
+			repos := args[1:]
+
+			if _, err := os.Stat(cmdFlags.reportFile); errors.Is(err, os.ErrExist) {
+				return err
+			}
+
+			reportWriter, err := os.OpenFile(cmdFlags.reportFile, os.O_WRONLY|os.O_CREATE, 0644)
+
+			if err != nil {
+				return err
+			}
+
+			return runCmd(owner, repos, cmdFlags.reposExclude, newAPIGetter(client), reportWriter)
+		},
+	}
+
+	// Determine default report file based on current timestamp; for more info see https://pkg.go.dev/time#pkg-constants
+	reportFileDefault := fmt.Sprintf("report-%s.csv", time.Now().Format("20060102150405"))
+
+	// Configure flags for command
+	cmd.Flags().StringSliceVarP(&cmdFlags.reposExclude, "exclude", "e", []string{}, "Repositories to exclude from report")
+	cmd.Flags().StringVarP(&cmdFlags.reportFile, "output-file", "o", reportFileDefault, "Name of file to write CSV report")
+
+	return &cmd
+}
+
+func runCmd(owner string, repos []string, repoExcludes []string, g Getter, reportWriter io.Writer) error {
 
 	// Resolve repositories in scope of report
-	var repos []string
-
-	if len(args) > 1 {
-		repos = args[1:]
-	} else {
+	if len(repos) <= 0 {
 		repos = make([]string, 0, 100) // Struggle for initial slice length given potential growth for large organizations
 		var reposCursor *string
 
@@ -62,7 +112,7 @@ func runCmd(args []string, g Getter, out io.Writer) error {
 
 	if len(repoExcludes) > 0 {
 		sort.Strings(repoExcludes)
-		sugar.Debugf("Excluding repos", "repos", repoExcludes)
+		zap.S().Debugf("Excluding repos", "repos", repoExcludes)
 
 		for _, repoExclude := range repoExcludes {
 			for i, repo := range repos {
@@ -77,28 +127,10 @@ func runCmd(args []string, g Getter, out io.Writer) error {
 		return errors.New("No repositories to report on")
 	}
 
-	sugar.Infof("Processing repos: %s", repos)
+	zap.S().Infof("Processing repos: %s", repos)
 
 	// Prepare writer for outputting report
-	csvWriterOutput := out
-
-	if len(outputFile) > 0 {
-		sugar.Debugf("Setting up output file \"%s\"", outputFile)
-
-		if _, err := os.Stat(outputFile); errors.Is(err, os.ErrExist) {
-			return err
-		}
-
-		output, err := os.OpenFile(outputFile, os.O_WRONLY|os.O_CREATE, 0644)
-
-		if err != nil {
-			return err
-		}
-
-		csvWriterOutput = output
-	}
-
-	csvWriter := csv.NewWriter(csvWriterOutput)
+	csvWriter := csv.NewWriter(reportWriter)
 
 	csvWriter.Write([]string{
 		"Owner",
@@ -119,7 +151,7 @@ func runCmd(args []string, g Getter, out io.Writer) error {
 
 	for _, repo := range repos {
 		var manifestCursor *string
-		sugar.Debugf("Processing %s/%s", owner, repo)
+		zap.S().Debugf("Processing %s/%s", owner, repo)
 
 		for {
 			manifestsQuery, err := g.GetManifests(owner, repo, manifestCursor)
@@ -140,18 +172,18 @@ func runCmd(args []string, g Getter, out io.Writer) error {
 
 			for _, manifest := range manifestsQuery.Repository.DependencyGraphManifests.Nodes {
 				var dependencyCursor *string
-				sugar.Debugf("Processing %s/%s > %s", owner, repo, manifest.Filename)
+				zap.S().Debugf("Processing %s/%s > %s", owner, repo, manifest.Filename)
 
 				for {
 					dependenciesQuery, err := g.GetDependencies(manifest.Id, dependencyCursor)
 
 					if err != nil {
-						sugar.Warnf("Error processing %s/%s > %s: %s", owner, repo, manifest.Filename, err)
+						zap.S().Warnf("Error processing %s/%s > %s: %s", owner, repo, manifest.Filename, err)
 						break
 					}
 
 					for _, dependency := range dependenciesQuery.Node.DependencyGraphManifest.Dependencies.Nodes {
-						sugar.Debugf("Processing %s/%s > %s > %s", owner, repo, manifest.Filename, dependency.PackageName)
+						zap.S().Debugf("Processing %s/%s > %s > %s", owner, repo, manifest.Filename, dependency.PackageName)
 
 						csvWriter.Write([]string{
 							owner,
@@ -187,53 +219,10 @@ func runCmd(args []string, g Getter, out io.Writer) error {
 	csvWriter.Flush()
 
 	if len(backoffQueue) > 0 {
-		sugar.Debugf("Reconciling back off queue: %s", backoffQueue)
+		zap.S().Debugf("Reconciling back off queue: %s", backoffQueue)
 	}
 
 	return nil
-}
-
-// rootCmd represents the base command when called without any subcommands
-var rootCmd = &cobra.Command{
-	Use:   "gh-dependency-report [flags] owner [repo ...]",
-	Short: "Generate report of repository manifests and dependencies discovered through the dependency graph",
-	Long:  "Generate report of repository manifests and dependencies discovered through the dependency graph",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-
-		var err error
-		var client api.GQLClient
-
-		client, err = gh.GQLClient(&api.ClientOptions{
-			Headers: map[string]string{
-				"Accept": "application/vnd.github.hawkgirl-preview+json",
-			},
-		})
-
-		if err != nil {
-			return err
-		}
-
-		return runCmd(args, newAPIGetter(client), os.Stdout)
-	},
-}
-
-// Execute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
-func Execute() {
-	err := rootCmd.Execute()
-	if err != nil {
-		os.Exit(1)
-	}
-}
-
-func init() {
-	rootCmd.Flags().StringSliceVarP(&repoExcludes, "exclude", "e", []string{}, "Repositories to exclude from report")
-	rootCmd.Flags().StringVarP(&outputFile, "output-file", "o", "", "Name of file to write CSV report, defaults to stdout")
-
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
-	sugar = logger.Sugar()
 }
 
 type dependency struct {
