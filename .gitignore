@@ -1,5 +1,6 @@
 /gh-dependency-report
 /gh-dependency-report.exe
+*.csv
 
 # Created by https://www.toptal.com/developers/gitignore/api/visualstudiocode,macos,vim,go
 # Edit at https://www.toptal.com/developers/gitignore?templates=visualstudiocode,macos,vim,go

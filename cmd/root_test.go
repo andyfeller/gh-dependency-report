@@ -94,14 +94,18 @@ func stubbedDependencies() dependenciesQuery {
 
 func TestCommand(t *testing.T) {
 	cases := []struct {
-		name    string
-		args    []string
-		stubs   func(g *testGetter)
-		wantOut func(t *testing.T, output *bytes.Buffer)
+		name         string
+		owner        string
+		repos        []string
+		repoExcludes []string
+		stubs        func(g *testGetter)
+		wantOut      func(t *testing.T, output *bytes.Buffer)
 	}{
 		{
-			name: "example test",
-			args: []string{"OWNER"},
+			name:         "example test",
+			owner:        "OWNER",
+			repos:        []string{},
+			repoExcludes: []string{},
 			stubs: func(g *testGetter) {
 				g.Stub("GetRepos", stubbedRepoList("REPO"))
 				g.Stub("GetManifests", stubbedManifests())
@@ -123,7 +127,7 @@ func TestCommand(t *testing.T) {
 				tt.stubs(client)
 			}
 
-			err := runCmd(tt.args, client, out)
+			err := runCmd(tt.owner, tt.repos, tt.repoExcludes, client, out)
 			if err != nil {
 				t.Errorf("Did not expect error; got %s", err.Error())
 			}

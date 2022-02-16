@@ -4,8 +4,24 @@ Copyright © 2022 NAME HERE <EMAIL ADDRESS>
 */
 package main
 
-import "github.com/andyfeller/gh-dependency-report/cmd"
+import (
+	"os"
+
+	"github.com/andyfeller/gh-dependency-report/cmd"
+	"go.uber.org/zap"
+)
 
 func main() {
-	cmd.Execute()
+
+	// Initlaize global logger
+	logger, _ := zap.NewDevelopment()
+	defer logger.Sync()
+	zap.ReplaceGlobals(logger)
+
+	// Instantiate and execute root command
+	cmd := cmd.NewCmd()
+
+	if err := cmd.Execute(); err != nil {
+		os.Exit(1)
+	}
 }
