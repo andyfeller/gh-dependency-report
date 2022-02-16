@@ -15,7 +15,7 @@ func main() {
 
 	// Initlaize global logger
 	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	defer logger.Sync() // nolint:errcheck // not sure how to errcheck a deferred call like this
 	zap.ReplaceGlobals(logger)
 
 	// Instantiate and execute root command
