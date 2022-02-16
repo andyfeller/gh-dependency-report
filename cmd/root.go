@@ -132,7 +132,7 @@ func runCmd(owner string, repos []string, repoExcludes []string, g Getter, repor
 	// Prepare writer for outputting report
 	csvWriter := csv.NewWriter(reportWriter)
 
-	csvWriter.Write([]string{
+	err := csvWriter.Write([]string{
 		"Owner",
 		"Repo",
 		"Manifest",
@@ -145,6 +145,10 @@ func runCmd(owner string, repos []string, repoExcludes []string, g Getter, repor
 		"License",
 		"License Url",
 	})
+
+	if err != nil {
+		return err
+	}
 
 	// Retrieve data and produce report
 	var backoffQueue []manifestBackoff
@@ -185,7 +189,7 @@ func runCmd(owner string, repos []string, repoExcludes []string, g Getter, repor
 					for _, dependency := range dependenciesQuery.Node.DependencyGraphManifest.Dependencies.Nodes {
 						zap.S().Debugf("Processing %s/%s > %s > %s", owner, repo, manifest.Filename, dependency.PackageName)
 
-						csvWriter.Write([]string{
+						err := csvWriter.Write([]string{
 							owner,
 							repo,
 							manifest.Filename,
@@ -198,6 +202,10 @@ func runCmd(owner string, repos []string, repoExcludes []string, g Getter, repor
 							dependency.Repository.LicenseInfo.SpdxId,
 							dependency.Repository.LicenseInfo.Url,
 						})
+
+						if err != nil {
+							zap.S().Error("Error raised in writing output", zap.Error(err))
+						}
 					}
 
 					dependencyCursor = &dependenciesQuery.Node.DependencyGraphManifest.Dependencies.PageInfo.EndCursor
