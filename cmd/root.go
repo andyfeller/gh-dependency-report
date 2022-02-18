@@ -25,6 +25,7 @@ import (
 type cmdFlags struct {
 	reposExclude []string
 	reportFile   string
+	debug        bool
 }
 
 func NewCmd() *cobra.Command {
@@ -44,6 +45,13 @@ func NewCmd() *cobra.Command {
 
 			var err error
 			var client api.GQLClient
+
+			// Reinitialize logging if debugging was enabled
+			if cmdFlags.debug {
+				logger, _ := NewLogger(cmdFlags.debug)
+				defer logger.Sync() // nolint:errcheck // not sure how to errcheck a deferred call like this
+				zap.ReplaceGlobals(logger)
+			}
 
 			client, err = gh.GQLClient(&api.ClientOptions{
 				Headers: map[string]string{
@@ -78,8 +86,28 @@ func NewCmd() *cobra.Command {
 	// Configure flags for command
 	cmd.Flags().StringSliceVarP(&cmdFlags.reposExclude, "exclude", "e", []string{}, "Repositories to exclude from report")
 	cmd.Flags().StringVarP(&cmdFlags.reportFile, "output-file", "o", reportFileDefault, "Name of file to write CSV report")
+	cmd.PersistentFlags().BoolVarP(&cmdFlags.debug, "debug", "d", false, "Whether to debug logging")
 
 	return &cmd
+}
+
+func NewLogger(debug bool) (*zap.Logger, error) {
+
+	level := zap.InfoLevel
+
+	if debug {
+		level = zap.DebugLevel
+	}
+
+	loggerConfig := zap.Config{
+		Level:            zap.NewAtomicLevelAt(level),
+		Encoding:         "console",
+		EncoderConfig:    zap.NewDevelopmentEncoderConfig(),
+		OutputPaths:      []string{"stderr"},
+		ErrorOutputPaths: []string{"stderr"},
+	}
+
+	return loggerConfig.Build()
 }
 
 func runCmd(owner string, repos []string, repoExcludes []string, g Getter, reportWriter io.Writer) error {
@@ -172,6 +200,10 @@ func runCmd(owner string, repos []string, repoExcludes []string, g Getter, repor
 				} else {
 					return err
 				}
+			}
+
+			if manifestCursor == nil {
+				zap.S().Infof("Processing %s/%s contains %d manifests", owner, repo, manifestsQuery.Repository.DependencyGraphManifests.TotalCount)
 			}
 
 			for _, manifest := range manifestsQuery.Repository.DependencyGraphManifests.Nodes {
