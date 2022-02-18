@@ -2,7 +2,7 @@
 
 A `gh` extension to generate report of repository manifests and dependencies discovered through GitHub's [software supply chain](https://docs.github.com/en/code-security/supply-chain-security) capabilities.
 
-![Demo of gh-dependency-report extension](docs/gh-dependency-report-demo.gif)
+![Demo of gh-dependency-report extension](https://user-images.githubusercontent.com/2089743/154634826-716abba3-f139-4b7a-a106-01c0ab5b68c4.gif)
 
 ## Quickstart
 
