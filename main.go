@@ -14,7 +14,15 @@ import (
 func main() {
 
 	// Initlaize global logger
-	logger, _ := zap.NewDevelopment()
+	loggerConfig := zap.Config{
+		Level:            zap.NewAtomicLevelAt(zap.InfoLevel),
+		Encoding:         "console",
+		EncoderConfig:    zap.NewDevelopmentEncoderConfig(),
+		OutputPaths:      []string{"stderr"},
+		ErrorOutputPaths: []string{"stderr"},
+	}
+
+	logger, _ := loggerConfig.Build()
 	defer logger.Sync() // nolint:errcheck // not sure how to errcheck a deferred call like this
 	zap.ReplaceGlobals(logger)
 

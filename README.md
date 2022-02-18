@@ -23,6 +23,7 @@ Usage:
   gh-dependency-report [flags] owner [repo ...]
 
 Flags:
+  -d, --debug                Whether to debug logging
   -e, --exclude strings      Repositories to exclude from report
   -h, --help                 help for gh-dependency-report
   -o, --output-file string   Name of file to write CSV report (default "report-20220216081518.csv")
