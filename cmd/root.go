@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/andyfeller/gh-dependency-report/internal/log"
-
 	"github.com/cli/go-gh"
 	"github.com/cli/go-gh/pkg/api"
 	graphql "github.com/cli/shurcooL-graphql"
