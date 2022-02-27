@@ -19,10 +19,6 @@ jobs:
         go-version: 1.17
 
     - uses: golangci/golangci-lint-action@v2
-      with:
-        skip-cache: true
-        skip-pkg-cache: true
-        skip-build-cache: true
 
     - name: Build
       run: go build -v ./...
