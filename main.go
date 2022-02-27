@@ -8,21 +8,14 @@ import (
 	"os"
 
 	"github.com/andyfeller/gh-dependency-report/cmd"
+	"github.com/andyfeller/gh-dependency-report/internal/log"
 	"go.uber.org/zap"
 )
 
 func main() {
 
 	// Initlaize global logger
-	loggerConfig := zap.Config{
-		Level:            zap.NewAtomicLevelAt(zap.InfoLevel),
-		Encoding:         "console",
-		EncoderConfig:    zap.NewDevelopmentEncoderConfig(),
-		OutputPaths:      []string{"stderr"},
-		ErrorOutputPaths: []string{"stderr"},
-	}
-
-	logger, _ := loggerConfig.Build()
+	logger, _ := log.NewLogger(false)
 	defer logger.Sync() // nolint:errcheck // not sure how to errcheck a deferred call like this
 	zap.ReplaceGlobals(logger)
 
