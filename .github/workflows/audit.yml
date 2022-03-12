@@ -1,0 +1,28 @@
+name: audit
+on:
+  workflow_dispatch:
+jobs:
+  report:
+    environment: andyfeller
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - owner: andyfeller
+            repos: gh-dependency-report
+            artifact-name: report-gh-dependency-report.csv
+    steps:
+      - name: Setup
+        run: |
+          gh extension install andyfeller/gh-dependency-report
+          echo ${{ secrets.github_token }} | gh auth login --with-token
+
+      - name: Generate report
+        run: |
+          gh dependency-report ${{ matrix.owner }} ${{ matrix.repos }} -o report.csv
+
+      - name: Upload report
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: report.csv
