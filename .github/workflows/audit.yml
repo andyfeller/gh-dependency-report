@@ -11,14 +11,14 @@ jobs:
           - owner: andyfeller
             repos: gh-dependency-report
             artifact-name: report-gh-dependency-report.csv
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Setup
         run: |
           gh extension install andyfeller/gh-dependency-report
 
       - name: Generate report
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh dependency-report ${{ matrix.owner }} ${{ matrix.repos }} -o report.csv
 
