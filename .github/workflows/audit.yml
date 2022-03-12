@@ -15,7 +15,7 @@ jobs:
       - name: Setup
         run: |
           gh extension install andyfeller/gh-dependency-report
-          echo ${{ secrets.github_token }} | gh auth login --with-token
+          echo ${{ secrets.GITHUB_TOKEN }} | gh auth login --with-token
 
       - name: Generate report
         run: |
