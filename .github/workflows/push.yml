@@ -1,0 +1,38 @@
+name: push
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'go.mod'
+env:
+  GOPACKAGE: github.com/andyfeller/gh-dependency-report
+jobs:
+  license-update:
+    name: Update OSS license notices
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Generate Go license notices
+        run: |
+          go install github.com/google/go-licenses@latest
+          go-licenses report $GOPACKAGE third-party-licenses.txt || echo "Ignore warnings"
+          go-licenses save $GOPACKAGE --save_path=third-party || echo "Ignore warnings"
+
+      - name: Commit license updates
+        run: |
+          git config --local user.name "License Updater"
+          git config --local user.email "andrew.feller+license-updater@gmail.com"
+
+          git add third-party third-party-licenses.txt
+          git commit -m "generate licenses - $GITHUB_SHA" || echo "No Changes in license"
+
+          git push origin HEAD:refs/heads/main
