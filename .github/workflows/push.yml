@@ -9,7 +9,7 @@ on:
       - '.github/licenses.tmpl'
 env:
   GOPACKAGE: github.com/andyfeller/gh-dependency-report
-  BRANCH: update-licenses-${{ github.sha }}}
+  BRANCH: update-licenses-${{ github.sha }}
   COMMITTER_NAME: License Updater AF
   COMMITTER_EMAIL: 390762+license-updated-af[bot]@users.noreply.github.com
 jobs:
@@ -42,8 +42,8 @@ jobs:
       - name: Generate Go license notices
         run: |
           go install github.com/google/go-licenses@latest
-          go-licenses report $GOPACKAGE --template .github/licenses.tmpl > third-party-licenses.md || echo "Ignore warnings"
-          go-licenses save $GOPACKAGE --save_path=third-party || echo "Ignore warnings"
+          go-licenses report $GOPACKAGE --template .github/licenses.tmpl > third-party-licenses.md
+          go-licenses save $GOPACKAGE --save_path=third-party
 
           git add third-party third-party-licenses.md
           git commit -m "Generate licenses - $GITHUB_SHA" || echo "No Changes in license"
