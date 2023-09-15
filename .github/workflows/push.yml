@@ -10,7 +10,7 @@ on:
 env:
   GOPACKAGE: github.com/andyfeller/gh-dependency-report
   BRANCH: update-licenses-${{ github.sha }}
-  COMMITTER_NAME: License Updater AF
+  COMMITTER_NAME: License Updater
   COMMITTER_EMAIL: 390762+license-updated-af[bot]@users.noreply.github.com
 jobs:
   license-update:
