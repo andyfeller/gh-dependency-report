@@ -33,12 +33,6 @@ jobs:
 
           git checkout -b "$BRANCH"
 
-      - uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app_id: ${{ secrets.APP_ID }}
-          private_key: ${{ secrets.PRIVATE_KEY }}
-
       - name: Generate Go license notices
         run: |
           go install github.com/google/go-licenses@latest
@@ -51,7 +45,7 @@ jobs:
 
       - name: Open pull request
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr create \
               --title "License Update - $GITHUB_SHA" \
