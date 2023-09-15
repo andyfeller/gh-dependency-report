@@ -42,7 +42,7 @@ jobs:
       - name: Generate Go license notices
         run: |
           go install github.com/google/go-licenses@latest
-          go-licenses report $GOPACKAGE third-party-licenses.txt --template .github/licenses.tmpl > third-party-licenses.md || echo "Ignore warnings"
+          go-licenses report $GOPACKAGE --template .github/licenses.tmpl > third-party-licenses.md || echo "Ignore warnings"
           go-licenses save $GOPACKAGE --save_path=third-party || echo "Ignore warnings"
 
           git add third-party third-party-licenses.md
