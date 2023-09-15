@@ -9,8 +9,9 @@ on:
       - '.github/licenses.tmpl'
 env:
   GOPACKAGE: github.com/andyfeller/gh-dependency-report
-  COMMITTER_NAME: License Updater
-  COMMITTER_EMAIL: andrew.feller+license-updater@gmail.com
+  BRANCH: update-licenses-${{ github.sha }}}
+  COMMITTER_NAME: License Updater AF
+  COMMITTER_EMAIL: 390762+license-updated-af[bot]@users.noreply.github.com
 jobs:
   license-update:
     name: Update OSS license notices
@@ -19,11 +20,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Set up Go
+      - name: Setup Go
         uses: actions/setup-go@v4
         with:
           go-version-file: 'go.mod'
           cache: true
+
+      - name: Setup Git
+        run: |
+          git config --local user.name "$COMMITTER_NAME"
+          git config --local user.email "$COMMITTER_EMAIL"
+
+          git checkout -b "$BRANCH"
+
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.PRIVATE_KEY }}
 
       - name: Generate Go license notices
         run: |
@@ -31,12 +45,15 @@ jobs:
           go-licenses report $GOPACKAGE third-party-licenses.txt --template .github/licenses.tmpl > third-party-licenses.md || echo "Ignore warnings"
           go-licenses save $GOPACKAGE --save_path=third-party || echo "Ignore warnings"
 
-      - name: Commit license updates
-        run: |
-          git config --local user.name "$COMMITTER_NAME"
-          git config --local user.email "$COMMITTER_EMAIL"
-
           git add third-party third-party-licenses.md
-          git commit -m "generate licenses - $GITHUB_SHA" || echo "No Changes in license"
+          git commit -m "Generate licenses - $GITHUB_SHA" || echo "No Changes in license"
 
-          git push origin HEAD:refs/heads/main
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh pr create \
+              --title "License Update - $GITHUB_SHA" \
+              --body "This PR updates the license notices for all third-party dependencies" \
+              --base main \
+              --head "$BRANCH"
