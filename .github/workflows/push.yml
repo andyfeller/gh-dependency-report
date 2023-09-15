@@ -37,7 +37,7 @@ jobs:
         run: |
           go install github.com/google/go-licenses@latest
           go-licenses report $GOPACKAGE --template .github/licenses.tmpl > third-party-licenses.md
-          go-licenses save $GOPACKAGE --save_path=third-party
+          go-licenses save $GOPACKAGE --save_path=third-party --force
 
           git add third-party third-party-licenses.md
           git commit -m "Generate licenses - $GITHUB_SHA"
