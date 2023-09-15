@@ -46,7 +46,8 @@ jobs:
           go-licenses save $GOPACKAGE --save_path=third-party
 
           git add third-party third-party-licenses.md
-          git commit -m "Generate licenses - $GITHUB_SHA" || echo "No Changes in license"
+          git commit -m "Generate licenses - $GITHUB_SHA"
+          git push origin "$BRANCH"
 
       - name: Open pull request
         env:
